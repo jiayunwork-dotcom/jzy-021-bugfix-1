@@ -1,0 +1,10 @@
+{
+  "name": "土建工序三点估算（PERT）",
+  "target": 14,
+  "activities": [
+    {"id": "A",  "three_point": {"optimistic": 2, "most_likely": 5, "pessimistic": 8}},
+    {"id": "B1", "duration": 4, "predecessors": ["A"]},
+    {"id": "B2", "three_point": {"optimistic": 3, "most_likely": 4, "pessimistic": 11}, "predecessors": ["A"]},
+    {"id": "C",  "duration": 2, "predecessors": ["B1", "B2"]}
+  ]
+}

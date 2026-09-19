@@ -1,0 +1,11 @@
+{
+  "name": "办公楼基础与主体（确定历时）",
+  "activities": [
+    {"id": "A",  "duration": 3},
+    {"id": "B",  "duration": 5, "predecessors": ["A"]},
+    {"id": "C1", "duration": 4, "predecessors": ["B"]},
+    {"id": "C2", "duration": 6, "predecessors": ["B"]},
+    {"id": "D",  "duration": 8, "predecessors": ["C1", "C2"]},
+    {"id": "E",  "duration": 2, "predecessors": ["D"]}
+  ]
+}

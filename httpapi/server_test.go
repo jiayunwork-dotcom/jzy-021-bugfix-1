@@ -146,6 +146,74 @@ func TestPERTOverHTTP(t *testing.T) {
 	}
 }
 
+// Regression for the fetch-after-submit mismatch: with two parallel critical
+// branches, GET /jobs/{n} must return the very PERT numbers POST /jobs
+// computed — variance/stddev of the SELECTED critical path, not a sum over
+// every three-point activity in the network.
+func TestPERTSubmitFetchRoundTrip(t *testing.T) {
+	h, _ := newTestServer(t)
+	body := map[string]any{
+		"name": "pert round trip",
+		"activities": []map[string]any{
+			{"id": "P", "duration": 1},
+			{"id": "Q", "three_point": map[string]any{"optimistic": 2, "most_likely": 4, "pessimistic": 6}, "predecessors": []string{"P"}},
+			{"id": "R", "three_point": map[string]any{"optimistic": 1, "most_likely": 4, "pessimistic": 7}, "predecessors": []string{"P"}},
+			{"id": "T", "duration": 2, "predecessors": []string{"Q", "R"}},
+		},
+		"target": 9,
+	}
+	rec, out := postJSON(t, h, "/jobs", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	pertAtSubmit, _ := out["pert"].(map[string]any)
+	if pertAtSubmit == nil {
+		t.Fatal("missing pert in submit response")
+	}
+	if v, _ := pertAtSubmit["project_variance"].(float64); v != 1 {
+		t.Fatalf("submit project_variance %v, want 1 (selected path P-R-T)", v)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/1", nil)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET status %d", rec2.Code)
+	}
+	var fetched map[string]any
+	if err := json.Unmarshal(rec2.Body.Bytes(), &fetched); err != nil {
+		t.Fatal(err)
+	}
+	pertFetched, _ := fetched["pert"].(map[string]any)
+	if pertFetched == nil {
+		t.Fatal("missing pert in fetched job")
+	}
+
+	// Scalar PERT numbers identical between submit and fetch.
+	for _, key := range []string{"project_variance", "standard_deviation", "mean_duration", "completion_probability"} {
+		if pertFetched[key] != pertAtSubmit[key] {
+			t.Fatalf("%s changed across submit/fetch: %v -> %v", key, pertAtSubmit[key], pertFetched[key])
+		}
+	}
+	if v, _ := pertFetched["project_variance"].(float64); v != 1 {
+		t.Fatalf("fetched project_variance %v, want 1", v)
+	}
+	if s, _ := pertFetched["standard_deviation"].(float64); s != 1 {
+		t.Fatalf("fetched standard_deviation %v, want 1", s)
+	}
+	sel, _ := pertFetched["selected_critical_path"].([]any)
+	if len(sel) != 3 || sel[0] != "P" || sel[1] != "R" || sel[2] != "T" {
+		t.Fatalf("fetched selected path %v, want [P R T]", sel)
+	}
+
+	// The whole PERT block (incl. all_critical_path_variances) is identical.
+	b0, _ := json.Marshal(pertAtSubmit)
+	b1, _ := json.Marshal(pertFetched)
+	if !bytes.Equal(b0, b1) {
+		t.Fatalf("pert block changed across submit/fetch:\nsubmit %s\nfetch  %s", b0, b1)
+	}
+}
+
 func TestDemoEndpoints(t *testing.T) {
 	h, _ := newTestServer(t)
 

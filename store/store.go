@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -62,7 +61,10 @@ func (s *FileStore) Save(ctx context.Context, job *cpm.Job) (*cpm.Job, error) {
 	return &stored, nil
 }
 
-// Get reads one job by number.
+// Get reads one job by number. The persisted job is returned verbatim: PERT
+// variance/stddev were computed by the kernel at submit time along the
+// selected critical path, and re-deriving them here (e.g. summing variances
+// of every activity, critical or not) would corrupt that result.
 func (s *FileStore) Get(ctx context.Context, number int) (*cpm.Job, error) {
 	name := fmt.Sprintf("%s%d%s", jobFilePrefix, number, jobFileExt)
 	data, err := os.ReadFile(filepath.Join(s.dir, name))
@@ -75,16 +77,6 @@ func (s *FileStore) Get(ctx context.Context, number int) (*cpm.Job, error) {
 	var job cpm.Job
 	if err := json.Unmarshal(data, &job); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", name, err)
-	}
-	if job.PERT != nil {
-		sum := 0.0
-		for i := range job.Activities {
-			if job.Activities[i].Variance != nil {
-				sum += *job.Activities[i].Variance
-			}
-		}
-		job.PERT.Variance = sum
-		job.PERT.StdDev = math.Sqrt(math.Max(sum, 0))
 	}
 	return &job, nil
 }

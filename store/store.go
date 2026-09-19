@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -76,16 +75,13 @@ func (s *FileStore) Get(ctx context.Context, number int) (*cpm.Job, error) {
 	if err := json.Unmarshal(data, &job); err != nil {
 		return nil, fmt.Errorf("decode %s: %w", name, err)
 	}
-	if job.PERT != nil {
-		sum := 0.0
-		for i := range job.Activities {
-			if job.Activities[i].Variance != nil {
-				sum += *job.Activities[i].Variance
-			}
-		}
-		job.PERT.Variance = sum
-		job.PERT.StdDev = math.Sqrt(math.Max(sum, 0))
-	}
+	// The persisted PERT result is authoritative: project variance is the sum
+	// along the selected critical path (see cpm.selectPERTPath), and the
+	// completion probability was computed against that standard deviation.
+	// It must NOT be recomputed here by summing every three-point activity in
+	// the network — that would pull in non-critical branches and the critical
+	// paths that lost the max-variance selection, silently contradicting both
+	// selected_critical_path and all_critical_path_variances.
 	return &job, nil
 }
 

@@ -146,6 +146,90 @@ func TestPERTOverHTTP(t *testing.T) {
 	}
 }
 
+func TestPERTFetchVarianceStaysOnSelectedPath(t *testing.T) {
+	h, _ := newTestServer(t)
+	// Two parallel critical paths P-Q-T (Q var 4/9) and P-R-T (R var 1);
+	// the wider P-R-T is selected. A non-critical branch must not matter.
+	body := map[string]any{
+		"name": "two-critical-branches",
+		"activities": []map[string]any{
+			{"id": "P", "duration": 1},
+			{"id": "Q", "three_point": map[string]any{"optimistic": 2, "most_likely": 4, "pessimistic": 6}, "predecessors": []string{"P"}},
+			{"id": "R", "three_point": map[string]any{"optimistic": 1, "most_likely": 4, "pessimistic": 7}, "predecessors": []string{"P"}},
+			{"id": "T", "duration": 2, "predecessors": []string{"Q", "R"}},
+		},
+		"target": 9,
+	}
+	rec, out := postJSON(t, h, "/jobs", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("submit status %d: %s", rec.Code, rec.Body.String())
+	}
+	submitPERT, _ := out["pert"].(map[string]any)
+	if got := submitPERT["project_variance"]; got != 1.0 {
+		t.Fatalf("submit variance = %v, want 1", got)
+	}
+	if got := submitPERT["standard_deviation"]; got != 1.0 {
+		t.Fatalf("submit stddev = %v, want 1", got)
+	}
+	sel, _ := submitPERT["selected_critical_path"].([]any)
+	if len(sel) != 3 || sel[0] != "P" || sel[1] != "R" || sel[2] != "T" {
+		t.Fatalf("selected path = %v, want P,R,T", sel)
+	}
+	submitProb := submitPERT["completion_probability"].(float64)
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/1", nil)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("fetch status %d", rec2.Code)
+	}
+	var fetched struct {
+		PERT struct {
+			Variance float64  `json:"project_variance"`
+			StdDev   float64  `json:"standard_deviation"`
+			Selected []string `json:"selected_critical_path"`
+			AllPaths []struct {
+				Path     []string `json:"path"`
+				Variance float64  `json:"variance"`
+			} `json:"all_critical_path_variances"`
+			Probability *float64 `json:"completion_probability"`
+		} `json:"pert"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &fetched); err != nil {
+		t.Fatal(err)
+	}
+	if fetched.PERT.Variance != 1.0 {
+		t.Fatalf("fetched project variance = %v, want 1 (must not sum Q's 4/9 too)", fetched.PERT.Variance)
+	}
+	if fetched.PERT.StdDev != 1.0 {
+		t.Fatalf("fetched stddev = %v, want 1", fetched.PERT.StdDev)
+	}
+	if strings.Join(fetched.PERT.Selected, ",") != "P,R,T" {
+		t.Fatalf("fetched selected path = %v, want P,R,T", fetched.PERT.Selected)
+	}
+	// The selected path's per-path listing must equal the project variance.
+	var selectedListed float64
+	var loser float64
+	for _, pv := range fetched.PERT.AllPaths {
+		switch strings.Join(pv.Path, ",") {
+		case "P,R,T":
+			selectedListed = pv.Variance
+		case "P,Q,T":
+			loser = pv.Variance
+		}
+	}
+	if selectedListed != 1.0 {
+		t.Fatalf("P-R-T listed variance = %v, want 1", selectedListed)
+	}
+	if diff := loser - 4.0/9.0; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("P-Q-T listed variance = %v, want 4/9", loser)
+	}
+	// Probability stays the submit-time value, consistent with stddev 1.
+	if fetched.PERT.Probability == nil || *fetched.PERT.Probability != submitProb {
+		t.Fatalf("fetched probability %v != submit %v", fetched.PERT.Probability, submitProb)
+	}
+}
+
 func TestDemoEndpoints(t *testing.T) {
 	h, _ := newTestServer(t)
 
